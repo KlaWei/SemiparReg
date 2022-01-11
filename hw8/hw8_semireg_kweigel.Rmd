@@ -1,0 +1,313 @@
+---
+title: "Semiparametric regression - Homework 8"
+author: "Klaudia Weigel"
+output: 
+  pdf_document: 
+    fig_caption: yes
+    highlight: tango
+    number_sections: yes
+geometry: margin=2cm
+---
+
+```{r setup, include=FALSE}
+library(formatR)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+branded_colors <- list(
+  "blue"   = "#00798c",
+  "red"    = "#d1495b",
+  "yellow" = "#edae49",
+  "green"  = "#66a182",
+  "navy"   = "#2e4057",
+  "grey"   = "#8d96a3"
+)
+my_colors <-  as.vector(unlist(branded_colors))
+
+library(RColorBrewer)
+my_col = brewer.pal(n = 5, "Set1")[2:5]
+```
+
+# Exercise 1
+
+We consider the $\texttt{WarsawApts}$ dataset containing information about house prices in Warsaw. 
+\small
+```{r}
+library(HRW); library(mgcv); library(tidyverse)
+data(WarsawApts)
+```
+
+\normalsize
+## (a)
+We will first fit a semiparametric model associating "construction.date" and "areaPerMzloty". We will use cubic spline basis functions and "REML" as a smoothing parameter selection criterion.
+\small
+```{r}
+fitGAMcr <- gam(areaPerMzloty~s(construction.date, bs = 'cr', k = 30), 
+                data = WarsawApts, method = "REML")
+```
+\normalsize
+## (b)
+In this point we will introduce "district" to the model as an additive factor. Our model will have the following form
+$$
+\begin{aligned}
+\texttt{areaPerMzloty}_i &= \beta_0 + \beta_1I(\texttt{district}_i == \texttt{Srodmiescie}) + \beta_2I(\texttt{district}_i == \texttt{Wola}) \\
+&+ \beta_3I(\texttt{district}_i == \texttt{Zoliborz}) +  f(\texttt{construction.date}_i) + \epsilon_i.
+\end{aligned}
+$$
+
+\small
+```{r}
+fitGAMcrDist <- gam(areaPerMzloty~s(construction.date, bs = 'cr', k = 30) +
+                      factor(district), 
+                    data = WarsawApts, method = "REML")
+summary(fitGAMcrDist)
+```
+
+\normalsize
+We can observe that there is no significant difference between Mokotow, Wola and Zoliborz. 
+
+## (c)
+We will now plot the fitted lines. First let us see fits from a) and b) on one plot.
+\small
+```{r}
+xg <- seq(min(WarsawApts$construction.date), max(WarsawApts$construction.date), 
+          length = 1001)
+fHatgGAMcr <- predict(fitGAMcr, newdata = data.frame(construction.date = xg))
+newdat <- expand.grid(construction.date = xg, 
+                      district = levels(as.factor(WarsawApts$district)))
+fHatgGAMcrDist <- predict(fitGAMcrDist, newdata = newdat)
+
+data_plot <- data.frame(newdat, fHatgGAMcrDist)
+colnames(data_plot) <- c('xg', 'district', 'fit')
+df1 <- data.frame(xg, rep("All districts", length(xg)), fHatgGAMcr)
+colnames(df1) <- c('xg', 'district', 'fit')
+
+rbind(data_plot, df1) %>% 
+  mutate(highlight = district == "All districts") %>% 
+  ggplot() +
+  geom_point(data = WarsawApts, aes(x=construction.date, 
+                                    y=areaPerMzloty, 
+                                    color = district), alpha = 0.5) +
+  geom_line(aes(x = xg, y = fit, color = district, size = highlight)) +
+  scale_color_brewer(palette="Set1") +  
+  guides(size = FALSE) +
+  scale_size_manual(values = c("TRUE" = 0.8, "FALSE" = 0.5))
+```
+\normalsize
+We see that the fitted lines are almost the same for districts Wola, Mokotow and Zoliborz. The area is significantly lower for Srodmiescie district, when compared Mokotow. The fitted line estimated from the model in point (a) is closer to the lines for Wola, Mokotow and Zoliborz.     
+
+
+Let us also see the fitted lines from the model from point (b) with respect to subset of the data corresponding to a particular district:
+\small
+```{r,  fig.width=5.5, fig.align='center'}
+cbind(newdat, fHatgGAMcrDist) %>% 
+  ggplot() +
+  geom_point(data = WarsawApts, aes(x=construction.date, 
+                                    y=areaPerMzloty,
+                                    color=district), 
+             alpha = 0.3) +
+  geom_line(aes(x = construction.date, y = fHatgGAMcrDist, color = district)) +
+  scale_color_manual(values = my_col) +  
+  guides(color="none") +
+  facet_wrap(~district)
+```
+\normalsize
+
+## (d)
+Overall there is little difference in \texttt{areaPerMzloty} as a function of \texttt{construction.date} for districts Mokotow, Wola, Zoliborz. The only district that is significantly different is Srodmiescie, where the mean value of area to price ratio is smaller by about 12 units when compared to Mokotow.
+
+# Exercise 2
+
+In this exercise we will use data \texttt{retirePlan}. Our goal is to choose the "best additive model" to predict the "log(contrib)", i.e. the natural log of the contributions to the retirement plan.
+\small
+```{r}
+retirePlan <- read.table("retirePlan.txt", header = T)
+head(retirePlan)
+```
+\normalsize
+Variables "susan", "group", "vest", "failsafe" are categorical taking values 0 or 1, so we will treat them as factors.
+\small
+```{r}
+retirePlan_cat <- retirePlan
+cols <- c("failsafe", "susan", "group", "vest")
+retirePlan_cat[,cols] <- lapply(retirePlan_cat[,cols], factor)
+```
+\normalsize
+
+We might want to check correlations between numerical variables.
+
+\small
+```{r, out.width="300px", fig.align='center'}
+df <- retirePlan %>% 
+  mutate(log_contrib = log(contrib)) 
+corrplot::corrplot(cor(df[,!names(df) %in% c(cols, "contrib")]), method = "number")
+```
+\normalsize
+
+We see that there is a strong correlation between "log(contrib)" and "estimate". "Estimate" is strongly correlated with "eligible", so it would be reasonable to keep one of these variables in the model.
+
+## (a)
+
+First we will try a univariate approach where we where each variable is assessed via its contribution and only
+the variables with significant contributions are used in the final model with an
+appropriate functional form.
+
+\small
+```{r}
+m_a1 <- gam(log(contrib) ~ group +  s(salary) + s(eligible) + 
+              failsafe + susan + s(turnover) + s(eligible) + 
+              vest + s(match, k=5) + s(estimate), data = retirePlan_cat)
+summary(m_a1)
+par(mar = c(3,4,3,2))
+plot(m_a1, pages = 1, scheme = 1, seWithMean = FALSE, all.terms = TRUE, shade = TRUE)
+```
+\normalsize
+
+We see that the only significant variables are "group", "estimate", "turnover" and "match". We also observe that "turnover" is a linear effect (edf = 1). 
+
+\small
+```{r}
+m_a <- gam(log(contrib) ~ group + s(estimate) + turnover + s(match, k=5), data = retirePlan_cat)
+summary(m_a)
+```
+\normalsize
+In this model "match" turns out to be insignificant, we might want remove, getting:
+\small
+```{r}
+m_a <- gam(log(contrib) ~ group + s(estimate) + turnover, data = retirePlan_cat)
+summary(m_a)
+```
+\normalsize
+
+## (b)
+We will try and select the best model using $\texttt{Gam.select}$ function from the $\texttt{gam}$ library.
+\small
+```{r}
+library(gam)
+fitInitial <- gam::gam(log(contrib) ~ group + turnover +
+                         eligible + vest + failsafe + 
+                         match + salary + estimate + susan, data = retirePlan_cat)
+stepFit <- step.Gam(fitInitial,
+                    scope = list("salary" = ~ 1 + salary + s(salary,2),
+                                 "failsafe" = ~ 1 + failsafe,
+                                 "susan" = ~ 1 + susan,
+                                 "group" = ~ 1 + group,
+                                 "eligible" = ~ 1 + eligible + s(eligible,2),
+                                 "estimate" = ~ 1 + estimate + s(estimate,2),
+                                 "vest" = ~ 1 + vest,
+                                 "match" = ~ 1 + match + s(match,2)),
+                    trace = FALSE)
+print(names(stepFit$"model")[-1])
+```
+\normalsize
+We can now fit a model using the $\texttt{mgcv}$ package with the chosen predictor variables.
+\small
+```{r}
+detach(package:gam)
+m_b <- gam(log(contrib) ~ turnover + s(salary) + group + s(estimate) + s(match, k=5), 
+           data = retirePlan_cat)
+summary(m_b)
+```
+Even though the "salary" variable was chosen it is not significant.
+
+\normalsize
+
+## (c)
+We will now try to select a model via $\texttt{gam.selection}$. Because \texttt{select = TRUE} only penalizes smooth parameters we will define the factor variables as random effects (bs = "re").
+
+\small
+```{r}
+m_c <- gam(log(contrib) ~ s(group, bs = "re") +  s(salary) + s(eligible) + 
+              s(failsafe, bs = "re") + s(susan, bs = "re") + s(turnover) +
+              s(vest, bs = "re")  + s(match, k=5) + s(estimate),
+           data = retirePlan_cat, select = TRUE)
+
+summary(m_c)
+```
+\normalsize
+
+```{r}
+AIC(m_a, m_b, m_c)
+```
+
+The lowest AIC score has been obtained for the model in part c).
+
+# Exercise 3
+We again consider the $\texttt{WarsawApts}$ dataset.
+
+## (a)
+First we will fit a model with "construction.date" as a predictor and one curve for Srodmiescie and another curve for the other three districts, i.e. a binary-by-curve interaction model.
+
+\small
+```{r}
+WarsawAptsSrod <- WarsawApts %>% 
+  mutate(is_srodmiescie = case_when(district == "Srodmiescie" ~"Yes",
+                                    TRUE ~ "No"))
+WarsawAptsSrod$is_srodmiescie <- factor(WarsawAptsSrod$is_srodmiescie)
+
+fitGAMWarsaw_a <- gam(areaPerMzloty ~ is_srodmiescie +
+                  + s(construction.date,by = is_srodmiescie, k = 25),
+                data = WarsawAptsSrod,method = "REML")
+summary(fitGAMWarsaw_a)
+```
+\normalsize
+
+We see that all the terms are significant. Let us also see the fitted lines.
+
+\small
+```{r}
+newdat_3a <- expand.grid(construction.date = xg, is_srodmiescie = levels(WarsawAptsSrod$is_srodmiescie))
+fHatGAMWarsaw_a <- predict(fitGAMWarsaw_a, newdata = newdat_3a)
+data_plot <- data.frame(newdat_3a, fHatGAMWarsaw_a)
+colnames(data_plot) <- c('xg', 'is_srodmiescie', 'fit')
+
+data_plot %>% 
+  ggplot() +
+  geom_point(data = WarsawAptsSrod, aes(x=construction.date, 
+                                    y=areaPerMzloty, 
+                                    color = is_srodmiescie), 
+             alpha = 0.4) +
+  geom_line(aes(x = xg, y = fit, color = is_srodmiescie)) +
+  scale_color_manual(values = my_col) +
+  facet_wrap(~is_srodmiescie)
+```
+\normalsize
+
+## (b)
+Let us now fit a model with separate lines for each district
+\small
+```{r, fig.width=6, fig.align='center'}
+fitGAMWarsaw_b <- gam(areaPerMzloty ~ as.factor(district) +
+                        + s(construction.date,by = as.factor(district), k = 25),
+                      data = WarsawApts,method = "REML")
+summary(fitGAMWarsaw_b)
+```
+
+```{r}
+fHatGAMWarsaw_b <- predict(fitGAMWarsaw_b, newdata = newdat)
+data_plot <- data.frame(newdat, fHatGAMWarsaw_b)
+colnames(data_plot) <- c('xg', 'district', 'fit')
+
+data_plot %>% 
+  ggplot() +
+  geom_point(data = WarsawApts, aes(x=construction.date, 
+                                    y=areaPerMzloty, 
+                                    color = district), 
+             alpha = 0.3) +
+  geom_line(aes(x = xg, y = fit, color = district)) +
+  scale_color_manual(values = my_col) +
+  facet_wrap(~district) +
+  guides(color="none") 
+```
+\normalsize
+
+## (c)
+We will test models with th F-test. 
+
+```{r}
+anova(fitGAMWarsaw_a, fitGAMWarsaw_b, test = "F")
+```
+
+```{r}
+AIC(fitGAMWarsaw_a, fitGAMWarsaw_b)
+````
+
+According to the F-test and the AIC score we do not have sufficient evidence to prefer the model from part b).
