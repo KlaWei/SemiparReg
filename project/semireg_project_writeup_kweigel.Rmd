@@ -61,10 +61,6 @@ station. First such system was introduced in Amsterdam in 1965 and in recent yea
 
 In Seoul a bike sharing system called Ddareungi or Ttareungyi (Seoul Bike in English) was first introduced in October 2015 in selected areas by the Han River. Initially with 150 docking stations and 2,000 bicycles across five districts.
 
-[@ks1]
-
-
-
 # Generalized Linear Models
 
 Generalized linear models were first introduced as an extension of the linear models, and unlike linear models GLMs can accommodate various types of response variables like binary or count variables. 
