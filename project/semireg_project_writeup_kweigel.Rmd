@@ -1,0 +1,505 @@
+---
+title: "Predicting Seoul bike sharing demand with generalized additive models - Semiparametric Regression project write-up."
+author: "Klaudia Weigel"
+bibliography: references.bib
+natbiboptions: square
+fontsize: 10pt
+abstract: "The objective of this project is to use generalized linear models to predict bike sharing demand in a public bike rental system in Seoul, Korea. First we will introduce generalized linear models and generalized additive models as a more flexible alternative to generalized linear models for modelling data with with non-gaussian response variable. Then we will apply these models to the Seoul bike sharing data. We will compare different models, utilizing the root mean squared error and the mean absolute error metrics."
+output: 
+  pdf_document: 
+    fig_caption: yes
+    highlight: tango
+    number_sections: yes
+    citation_package: natbib
+geometry: margin=2.54cm
+header-includes:
+  - \usepackage{indentfirst}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,fig.pos = "!ht")
+options(scipen = 999)
+```
+
+```{r}
+library(lattice)
+library(tidyverse)
+library(mgcv)
+library(reshape2)
+library(cowplot)
+library(ggcorrplot)
+library(kableExtra)
+library(broom)
+library(gtools)
+library(gratia)
+pal <- c("#f8766d", "#d39200",  "#00c19f", "#00b9e3", "#db72fb")
+
+seoul_bikes <- read.csv("datasets/SeoulBikeData.csv")
+colnames(seoul_bikes) <- c('Date','RentedBikeCount', 'Hour', 'Temp', 'Humidity',
+                           'WindSpeed', 'Visibility', 'DewPointTemp',
+                           'SolarRadiation', 'Rainfall', 'Snowfall', 'Season',
+                           'Holiday', 'FunctioningDay')
+seoul_bikes$Date <- as.Date(seoul_bikes$Date, "%d/%m/%Y")
+seoul_bikes$Day <- weekdays(seoul_bikes$Date)
+seoul_bikes$Day <- factor(weekdays(seoul_bikes$Date), 
+                          levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",  "Saturday", "Sunday"))
+levels(seoul_bikes$Day) <- c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+seoul_bikes$Month <- factor(months(seoul_bikes$Date),
+                            levels = c("January", "February", "March", "April", "May", "June", "July", "August", 
+                                       "September", "October", "November", "December"))
+levels(seoul_bikes$Month) = c("Jan", "Feb", "March", "April", "May", "June", "July", "Aug", 
+                              "Sept", "Oct", "Nov", "Dec")
+seoul_bikes <-  seoul_bikes %>% 
+  mutate(Weekend = case_when(Day == "Sun" | Day == "Sat" ~ "Yes",
+                             TRUE ~ "No"))
+#seoul_bikes <- subset(seoul_bikes, FunctioningDay == "Yes")
+```
+
+# Introduction
+Bike sharing systems are bike rental services where the entire process of service registration, bike rental and return has become automated. Through these systems, users are able to easily rent a bike from a particular docking station and return it to another
+station. First such system was introduced in Amsterdam in 1965 and in recent years various bike sharing systems have been gaining popularity in many countries. Such systems are especially promoted in cities to reduce traffic congestion, reduce exhaust emissions and improve health of the residents. A shared bike also eliminates some of the disadvantages of a private bike like exposure to theft and high purchase costs. [@wiki_bikeshare]. According to bikesharingworldmap.com by August 2021, there were more than 10 million bikes shared in different kinds of schemes. Because of such rapid expansion there is a need for bike sharing programs to effectively understand the factors that influence demand so that they can better maintain inventory, schedule repairs, and manage resources.   
+
+In Seoul a bike sharing system called Ddareungi or Ttareungyi (Seoul Bike in English) was first introduced in October 2015 in selected areas by the Han River. Initially with 150 docking stations and 2,000 bicycles across five districts.
+
+[@ks1]
+
+
+
+# Generalized Linear Models
+
+Generalized linear models were first introduced as an extension of the linear models, and unlike linear models GLMs can accommodate various types of response variables like binary or count variables. 
+
+Let us assume that we have a set of observations $\{(y_i, x_{i1}, \dots, x_{ip})\}_{i=1}^n$, where $y_i$ is the response variable and  $(x_{i1}, \dots, x_{ip})$ is a set od predictors. In generalized linear models we assume that
+\begin{enumerate}
+\item The response variables $y_1,\dots, y_n$ are instances of independent random variables $Y_1, \dots, Y_n$ from the same distribution that belongs to the family of exponential distributions:
+$$
+f(y_i|\theta_i, \phi) = \exp \left[\frac{y_i\theta_i - b(\theta_i)}{a_i(\phi)} + c(y_i, \phi)\right]
+$$
+The $\theta$ is the canonical parameter and represents the location, while $\phi$ the dispersion parameter and represents the scale.
+\item For each $i$ the relation between the mean $\mu_i = E(Y_i)$ and the predictors $(x_{i1}, \dots, x_{ip})$ is assumed to be:
+$$
+\eta_i = g(\mu_i) = \beta_0 + \beta_1x_{i1} + \dots + \beta_p x_{ip},
+$$
+where $(\beta_0, \beta_1, \dots, \beta_p) \in \mathbb{R}^{p+1}$ is an unknown vector of regression parameters, and is the link function.
+\end{enumerate}
+
+It can be shown that if $Y_i$ has a distribution in the exponential family then it has mean and variance
+$$
+E(Y_i) = \mu_i = b'(\theta_i),
+$$
+$$
+\text{var}(Y_i) = \sigma^2_i = b''(\theta_i)a_i(\phi).
+$$
+
+The log-likelihood function of $\beta$ and $\phi$ is
+$$
+\ell(\beta, \phi) = \sum_{i=1}^n \log f(y_i) = \sum_{i=1}^n \frac{y_i\theta_i - b(\theta_i)}{a_i(\phi)} + c(y_i, \phi).
+$$
+
+A closed form solution of log-likelihood maximization can only be found in the case of linear regression. In other cases an algorithm called iteratively re-weighted least squares is most often applied. 
+
+An important value in GLMs is the *deviance* of the model, which is defined as
+$$
+D = 2\phi(\ell(\hat{\beta^s}) - \ell(\beta^r)),
+$$
+where $\ell(\hat{\beta^s})$ is the log-likelihood of the saturated model, in which we have one parameter per datapoint. Whereas $\ell(\beta^r)$ is the log-likelihood of the reduced model.
+
+
+# Generalized additive models
+A generalized additive model (GAM) is an extension of generalized linear model where the transformed mean is defined as a linear combination of smooth functions of covariates. Its main advantage is the flexibility in the specification of the relationship between a dependent variable and its corresponding covariates, contrary to the classical way to model that relationship based on linear associations, which is not always a good assumption in many applications. A very detailed overview of GAMs can be found for example in [@wood_2017], here we will provide general ideas, based on that source.
+
+
+A generalized linear has the form
+\begin{equation} \label{gam_m}
+g(\mu_i) =  A_i\gamma + \sum_j f_j(x_ji), \quad Y_i \sim EF(\mu_i, \phi),
+\end{equation}
+where $A_i$ is the $i$th row of a parametric model matrix, with a vector of parameters $\gamma$ and $f_j$ is a smooth function of covariate $x_j$. The response variables are assumed to be instances of random variables from the exponential family with mean $\mu_i$ and $\phi$ is the scale/dispersion parameter.  
+
+To estimate each function $f_j$, using the same methods as for linear models, $f_j$ must be represented in such a way that (\ref{gam_m}) becomes a linear model. This can be done by choosing a basis, defining the space of functions of which $f_j$ is an element. Choosing a basis, amounts to choosing some basis functions, which will be treated as completely known: if $b_i(x)$ is the ith such basis function, then f is assumed to have a representation
+$$
+f_j(x_j) = \sum_{i=1}^{q_j} b_{ji}(x_j) \beta_{ji},
+$$
+where $\beta_{j1}, \dots \beta_{jq_{j}})$ are unknown regression coefficients, different for every $f_j$. We may define every smooth term with different basis functions and a different number of them.
+We can therefore write our model as 
+$$
+g(\mu) = X\beta,
+$$
+where $X$ is the design matrix and $\beta$ is the vector of unknown regression coefficients.
+
+## Penalized regression
+
+If the functions $f_1, \dots, f_d$ were chosen to be arbitrarily complex we would most likely have to deal with severe overfitting to the training data. To prevent that, we penalize excessive wobbliness of $f_j$. We therefore want to maximize the penalized log-likelihood of the regression parameters.
+
+$$
+\ell_P(\beta) = \ell(\beta) - \frac{1}{2\phi}  \sum_{j=1}^d \lambda_j \times [\text{roughness measure of } f_j],
+$$
+
+where $\lambda_j$ is a smoothing parameter. The larger $\lambda_j$ is the more we penalize the regression coefficients, so that the function $f_j$ is not too wobbly. Generally the roughness measure may vary depending on the choice of the basis functions. It is commonly chosen to be $\int f_j''(x) dx$, which can be expressed as $\beta^T S_j \beta$, where $S_j$ is a known matrix, known as penalty matrix.
+
+In practice the penalized log-likelihood maximization problem is solved by penalized iteratively re-weighted least squares (P-IRLS), while the smoothing parameters can be estimated using cross validation or related criteria.
+
+The P-IRLS algorithm estimates $\beta$, given $\lambda$ using following steps
+\begin{enumerate}
+\item Initialize $\hat{\mu}_i = y_i +\delta_i$, $\hat{\eta}_i = g(\hat{\mu}_i)$, where $\delta_i$ is equal to zero or a small constant, ensuring that $\hat{\eta}_i$ is finite.
+\item Compute $z_i = g'(\hat{\mu}_i)(y_i - \hat{\mu}_i)/\alpha(\hat{\mu}_i) + \hat{\eta}_i$ and weights $w_i = \alpha(\hat{\mu}_i)/\{g'(\hat{\mu}_i)^2V(\hat{\mu}_i)\}$, where $\alpha(\mu_i) = 1 + (y_i - \mu_i)\{V'(\mu_i) + g''(\mu_i)/g'(\mu_i) \}$ and $V(\mu)$ is the variance function determined by the exponential family or by quasi-likelihood.
+\item Find $\hat{\beta}$ that minimizes the weighted least squares objective
+$$
+\|z - X\beta \|_{W}^2 + \sum_{j} \lambda_j \beta^T S_j \beta, \quad \text{ where }\quad \| a \|^2_{W} = a^TWa,
+$$
+then update $\hat{\eta} = X\hat{\beta}$ and $\hat{\mu}_i = g^{-1}(\hat{\eta}_i)$.
+\end{enumerate}
+
+We repeat the steps 1 and 2 until convergence.  
+
+The vector $\lambda$ is usually not known and has to be estimated. The estimation is usually done via *generalized cross validation*(GCV) score, defined as
+$$
+\mathcal{V}(\lambda) = \frac{nD(\hat{\beta})}{n - tr(A)}, \quad A = X(X^TX + S_{\lambda})^{-1}X^T.
+$$
+
+The *effective degrees of freedom* for a given smooth term $f_j$ is the sum of diagonal entries of $F = (X^TWX^T + \sum_{j} \lambda_j S_j)^{-1}X^TWX$ corresponding to the parameters of that $f_j$. 
+
+It can be shown that for large samples [@wood_2006]
+$$
+\hat{\beta} \sim N(E({\hat{\beta}}), V_e), \quad V_e = (X^TWX + S_{\lambda})^{-1}X^TWX(X^TWX + S_{\lambda})^{-1}\phi.
+$$
+However generally $E(\hat{\beta}) \neq \beta$, so we cannot use this fact for confidence interval prediction.
+
+An alternative is to use a Bayesian approach, which results in a Bayesian posterior covariance matrix for the parameters,
+$$
+V_{\beta} = (X^TWX + S_{\lambda})^{-1}\phi.
+$$
+and a corresponding posterior distribution for those parameters,
+$$
+\beta \sim N(\hat{\beta}, V_{\beta}).
+$$
+Now we can construct a Wald test for testing significance of parametric terms and smooth terms, details are given in [@wood_2017].
+
+\newpage
+
+# Quasi-Poisson regression
+It is often the case that count data are overdispersed, meaning that the variance of the response variable is significantly larger than the mean. In such cases assuming Poisson distribution for the response leads to an inaccurate model. There are however other methods we can apply to model such data like quasi-Poisson regression or negative binomial regression [@art1].
+
+## Quasi-likelihood
+The description quasi-likelihood follows from [@ks1]. Quasi-likelihood  assumes that the variance of the response variable $y_i$ is equal to $\phi V(\mu_i)$. The quasi-likelihood estimator of the regression parameters maximizes $Q = \sum_{i=1}^n Q_i$ where
+$$
+Q_i = \int_{y_i}^{\mu_i} \frac{y_i - u}{\phi V(u) }du.
+$$
+We estimate the dispersion parameter from 
+$$
+\hat{\phi} = \frac{1}{n-d-1}\sum_{i=1}^n \frac{(y_i - \hat{\mu}_i)^2}{V(\hat{\mu}_i)}
+$$
+
+In case of quasi-Poisson regression we have var$(y_i) = \phi \mu_i$. 
+
+\newpage
+
+# Data exploration
+Data exploration is an important step of fitting any machine learning model. In order to find significant features, identify relationships between different sets of predictors or eliminate potential collinearity among others we must carefully examine the dataset before actually fitting.  
+
+The data was originally introduced in [@art2]. It was collected for a year from 1st December 2017 to 30th November 2018 and provides information about hourly counts of the number of rented bikes. Additional features include weather conditions: temperature (in Celsius degrees), humidity (%), wind speed (m/s), visibility (10m), dew point temperature (in Celsius degrees), solar radiation (MJ/m$^2$), rainfall (mm), snowfall (cm). There are also variables indicating the season, whether the day was a public holiday and if the service was functional at the time. The dataset contains no missing values.
+
+
+```{r, fig.cap="Uppermost plot shows an average amout of bikes being rented out during each hour. Plots in the bottom part show how the distribution varies when grouped by day and by holiday."}
+p1 <- seoul_bikes %>% 
+  group_by(Hour) %>% 
+  summarise(RentedBikeCountHour = sum(RentedBikeCount)/n()) %>% 
+  ggplot(aes(x = as.factor(Hour), y = RentedBikeCountHour, fill = RentedBikeCountHour)) +
+  geom_col(alpha=0.9) +
+  labs(x="Hour", fill = "Rentals") +
+  scale_fill_gradient(low = "blue", high = "red")+
+  theme_bw() +
+  theme(legend.position="none", axis.title.x=element_text(size=8), axis.title.y=element_text(size=8))
+
+
+p2 <- ggplot(data = seoul_bikes, aes(x=Hour, y = RentedBikeCount, color = Day)) +
+  geom_smooth(fill=NA)  +
+  theme_bw() +
+  theme(legend.position = "bottom", 
+        legend.key.size = unit(0.3, 'cm'),
+        legend.text = element_text(size=7))
+
+p3 <- ggplot(data = seoul_bikes, aes(x=Hour, y = RentedBikeCount, color = Holiday)) +
+  geom_smooth(fill=NA) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+plot_grid(p1, plot_grid(p2, p3, ncol =2), ncol = 1)
+```
+
+From the above plots we see that generally the most bikes are being rented out in the evening. There are also two distinctive peaks at 8 am and 6 pm, which might indicate that a lot of people use bikes to commute to work/school.  
+
+The bottom plots show that the distribution of the number of rented bikes with respect to hour is different for when a day is a weekend or a holiday. During those days most bikes are being rented out in the evening hours and the distribution doesn't have as much variation. These are important interactions that should be accounted for in the model.
+
+```{r, fig.height=3.7, fig.cap="Boxplots of the number of rented bikes with respect to Month, Day, Holiday, Weekend and Season."}
+p1 <- seoul_bikes %>% 
+  ggplot(aes(x = Month, y = RentedBikeCount)) +
+  geom_boxplot(fill = pal[1]) +
+  ylab("") +
+  theme_bw() +
+  theme(axis.text.x = element_text(vjust = 0.7, size=7),
+        plot.margin = unit(c(0.5, 0, 0, 0), "cm"),
+        axis.text.y = element_text(size=6),
+        axis.title = element_text(size=8))
+
+p2 <- seoul_bikes %>% 
+  ggplot(aes(x = Day, y = RentedBikeCount)) +
+  geom_boxplot(fill = pal[2]) +
+  ylab("")  +
+  theme_bw() +
+  theme(axis.text.x = element_text(vjust = 0.7, size=7),
+        plot.margin = unit(c(0.5, 0, 0, 0), "cm"),
+        axis.text.y = element_text(size=6),
+        axis.title = element_text(size=8))
+
+p3 <- seoul_bikes %>% 
+  ggplot(aes(x = Holiday, y = RentedBikeCount)) +
+  geom_boxplot(fill = pal[3]) +
+  ylab("") +
+  theme_bw() +
+  theme(axis.text.x = element_text(vjust = 0.7, size=7),
+        plot.margin = unit(c(0.5, 0, 0, 0), "cm"),
+        axis.text.y = element_text(size=6),
+        axis.title = element_text(size=8))
+
+p4 <- seoul_bikes %>% 
+  ggplot(aes(x = Weekend, y = RentedBikeCount)) +
+  geom_boxplot(fill = pal[4]) +
+  ylab("") +
+  theme_bw() +
+  theme(axis.text.x = element_text(vjust = 0.7, size=7),
+        plot.margin = unit(c(0.5, 0, 0, 0), "cm"),
+        axis.text.y = element_text(size=6),
+        axis.title = element_text(size=8))
+
+p5 <- seoul_bikes %>% 
+  ggplot(aes(x = Season, y = RentedBikeCount)) +
+  geom_boxplot(fill = pal[5]) +
+  ylab("")  +
+  theme_bw() +
+  theme(axis.text.x = element_text(vjust = 0.7, size=7),
+        plot.margin = unit(c(0.5, 0, 0, 0), "cm"),
+        axis.text.y = element_text(size=6),
+        axis.title = element_text(size=8))
+
+p_1 <- cowplot::plot_grid(p1,p2)
+p_2 <- cowplot::plot_grid(p3,p4,p5, ncol = 3)
+cowplot::plot_grid(p_1, p_2, nrow = 2)
+```
+
+\newpage
+
+From the above boxplots we can conclude that the least number of bikes is being rented out in the winter months, whereas most people ride bikes in late spring, with peak in June and early fall. When it comes to the Day variable we don't see much difference in the amount of rentals between individual weekdays, the distinction however is visible when comparing a weekday to a weekend. Generally there are more rentals during no holiday days and weekdays.  
+
+We will now analyze the numerical variables. To analyze the numerical variables we begin with a correlation table.
+
+```{r}
+seoul_bikes_num <- seoul_bikes[, 2:11]
+library(corrr)
+tab_02 = seoul_bikes_num %>%
+  correlate() %>%
+  shave(upper = TRUE) %>%
+  fashion(decimals = 2, na_print = "—") 
+
+tab_02$term <- c("1. RentedBikeCount", "2. Hour", "3. Temp", "4. Humidity", 
+                     "5. WindSpeed", "6. Visibility", "7. DewPointTemp", "8. SolarRadiation", "9. Rainfall", "10. Snowfall")
+
+colnames(tab_02) <- c("Variable", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10")
+tab_02 <- tab_02[, 1:10]
+kable(tab_02, format = "latex", booktabs = TRUE, caption = "Correlations between numerical variables.", linesep = "") %>% 
+  kable_styling(latex_options = c("hold_position"))
+```
+
+From the correlation matrix we see that the Temp variable and the DewPointTemp variable are very strongly correlated. Since temperature is more strongly correlated with the response variable, DewPointTemp will be removed. When it comes to the response variable, we can see that the amount of rented bikes is most strongly correlated with Hour and Temp. 
+
+\newpage
+
+<!-- \newpage -->
+<!-- ```{r, fig.cap="Univariate plots of the numerical variables.", fig.height=4.5} -->
+<!-- seoul_bikes_num[,-c(2)] %>% -->
+<!--   melt(id.vars = c("RentedBikeCount")) %>% -->
+<!--   ggplot(aes(x=value, y=RentedBikeCount)) + -->
+<!--   geom_point(aes(x=value, y = RentedBikeCount), alpha = 0.3, size = 0.3) + -->
+<!--   geom_smooth(fill=NA) + -->
+<!--   facet_wrap(~variable, scales = "free", nrow = 3) + -->
+<!--   theme(legend.position = "none") -->
+<!-- ``` -->
+
+![Univariate plots of the numerical variables.](numeric.png){#fig:numeric}
+
+<!-- \begin{figure} -->
+<!-- \centerline{\includegraphics{numeric.png}} -->
+<!-- \caption{Entitäten zur Persistierung der Special Notifications} -->
+<!-- \end{figure} -->
+
+We see that most rentals generally occur within temperatures of around 20-30 degrees. In case of Humidity there is a decreasing trend of the number of rented bikes. For some of the observations the humidity index is equal to zero, which is not physically possible, these observations are a minority however and shouldn't affect the fit. The plots for Rainfall and Snowfall are similar and suggest that a significant number of counts lies along the dates when there was no rain or snow. The count increases with higher visibility and with higher solar radiation. Overall all the plots suggest a non-linear relationship between predictors and the response variable which suggests modeling the data with a generalized linear model.
+
+
+# Modeling
+
+```{r}
+seoul_bikes$Weekend <-  as.factor(seoul_bikes$Weekend)
+seoul_bikes$Holiday <-  as.factor(seoul_bikes$Holiday)
+seoul_bikes$Season <-  as.factor(seoul_bikes$Season)
+seoul_bikes$FunctioningDay <-  as.factor(seoul_bikes$FunctioningDay)
+
+cols <- c("RentedBikeCount", "Hour", "Temp", "Humidity", "WindSpeed",
+          "Visibility", "SolarRadiation", "Rainfall", "Snowfall",
+          "Season", "Holiday", "Month", "Weekend")
+
+
+seoul_bikes2 <- subset(seoul_bikes, FunctioningDay == "Yes")
+seoul_bikes2 <- seoul_bikes2[, cols]
+seoul_bikes2$Weekend_Holiday <- interaction(seoul_bikes2$Weekend, seoul_bikes2$Holiday)
+## set the seed to make your partition reproducible
+set.seed(122)
+
+## 80% of the sample size
+smp_size <- floor(0.8 * nrow(seoul_bikes2))
+train_ind <- sample(seq_len(nrow(seoul_bikes2)), size = smp_size)
+
+bikes_train <- seoul_bikes2[train_ind,]
+bikes_test <- seoul_bikes2[-train_ind,]
+```
+
+
+Following approach was taken to model the data
+\begin{enumerate}
+\item The observations when the rental service was not functional were removed from the dataset (295 observations).
+\item A subset of features was chosen: Hour, Temp, Humidity, WindSpeed, Visibility, SolarRadiation, Rainfall, Snowfall, Holiday, Weekend, Month. Dew point temperature was removed due to high correlation with temperature. Features Month and Weekend were extracted from the Date variable. Season was replaced by more informative Month. A new categorical feature was created as a joint interaction term of Weekend and Holiday (factor with 4 levels). So a total of 12.
+\item Modified dataset was split into training and validation sets, with 80\% split ratio. 
+```{r, results='asis', fig.cap="Train and test set sizes."}
+set_sizes_df <- data.frame(cbind(nrow(bikes_train), nrow(bikes_test)))
+colnames(set_sizes_df) <- c("Train", "Test")
+rownames(set_sizes_df) <- c("Size")
+knitr::kable(set_sizes_df, format = "latex", booktabs = TRUE, caption = "Train and test set sizes.") %>% 
+  kable_styling(position = "center", latex_options = c("hold_position"))
+```
+\item Different generalized additive models were used to model the data. The distribution was specified as quasi-Poisson, since the response variable is overdispersed with mean equal 704.6021 and variance equal to 416021.7. 
+\item For comparing different models we will evaluate root mean squared error and mean absolute error for the training set and testing set.
+
+$$
+RMSE = \sqrt{\frac{\sum_{i=1}^n (\hat{y}_i - y_i)^2}{n}}, \quad MAE = \frac{\sum_{i=1}^n |\hat{y}_i - y_i|}{n}.
+$$
+\end{enumerate}
+
+
+```{r}
+RMSE <- function(fitted_vals, true){
+  sqrt(mean((fitted_vals - true)^2))
+}
+
+MAE <- function(fitted_vals, true) {
+  mean(abs(fitted_vals - true))
+}
+
+m_glm <- readRDS("GAM0.rds")
+gam1 <- readRDS("GAM1.rds")
+gam2 <- readRDS("GAM2.rds")
+gam3 <- readRDS("GAM3.rds")
+gam4 <- readRDS("GAM4.rds")
+
+preds_glm <- predict(m_glm, newdata = bikes_test)
+preds_gam1 <- predict(gam1, newdata = bikes_test)
+preds_gam2 <- predict(gam2, newdata = bikes_test)
+preds_gam3 <- predict(gam3, newdata = bikes_test)
+preds_gam4 <- predict(gam4, newdata = bikes_test)
+
+rmse_scores <- data.frame(cbind(
+  c(RMSE(exp(predict(m_glm)), bikes_train$RentedBikeCount),
+    RMSE(exp(predict(gam1)), bikes_train$RentedBikeCount),
+    RMSE(exp(predict(gam2)), bikes_train$RentedBikeCount),
+    RMSE(exp(predict(gam3)), bikes_train$RentedBikeCount),
+    RMSE(exp(predict(gam4)), bikes_train$RentedBikeCount)),
+  c(RMSE(exp(preds_glm), bikes_test$RentedBikeCount),
+    RMSE(exp(preds_gam1), bikes_test$RentedBikeCount),
+    RMSE(exp(preds_gam2), bikes_test$RentedBikeCount),
+    RMSE(exp(preds_gam3), bikes_test$RentedBikeCount),
+    RMSE(exp(preds_gam4), bikes_test$RentedBikeCount))))
+
+mae_scores <- data.frame(cbind(
+  c(MAE(exp(predict(m_glm)), bikes_train$RentedBikeCount),
+    MAE(exp(predict(gam1)), bikes_train$RentedBikeCount),
+    MAE(exp(predict(gam2)), bikes_train$RentedBikeCount),
+    MAE(exp(predict(gam3)), bikes_train$RentedBikeCount),
+    MAE(exp(predict(gam4)), bikes_train$RentedBikeCount)),
+  c(MAE(exp(preds_glm), bikes_test$RentedBikeCount),
+    MAE(exp(preds_gam1), bikes_test$RentedBikeCount),
+    MAE(exp(preds_gam2), bikes_test$RentedBikeCount),
+    MAE(exp(preds_gam3), bikes_test$RentedBikeCount),
+     MAE(exp(preds_gam4), bikes_test$RentedBikeCount))))
+
+adj_r_sq <- c(summary(m_glm)$r.sq, summary(gam1)$r.sq, summary(gam2)$r.sq, summary(gam3)$r.sq, summary(gam4)$r.sq)
+dev_exp <- c(summary(m_glm)$dev.exp, summary(gam1)$dev.exp, summary(gam2)$dev.exp, summary(gam3)$dev.exp, summary(gam4)$dev.exp)
+
+colnames(rmse_scores) <- c("Train", "Test")
+
+res_all <- cbind(rmse_scores, mae_scores, adj_r_sq, dev_exp)
+colnames(res_all) <- c("Train", "Test", "Train", "Test", "R-sq.(adj)", "Deviance expl.")
+rownames(res_all) <- c("GLM", "GAM1", "GAM2", "GAM3", "GAM4")
+```
+
+
+
+## Model comparison
+
+All the models were trained in R with *gam* function from the mgcv library. In model definition we define smooth terms with $\texttt{s()}$. We can also specify the number of basis functions $\texttt{k}$, for example we can define $\texttt{s(Hour, k = 24)}$. If not otherwise specified *gam* uses thin plate regression splines. For bivariate smoothing me may use $\texttt{s(), te(), ti()}$.
+We will compare the following models:
+
+* GLM - basic generalized linear model with all predictor variables,
+$$
+\begin{aligned}
+\log(\mu_i) &= \beta_0 + \beta_1*Hour_i + \beta_2*Temp_i +  \beta_3*Humidity_i  +  \beta_4*WindSpeed_i \\
+&+  \beta_5*Visibility_i + \beta_6*SolarRadiation + \beta_7*Rainfall_i + \beta_8*Snowfall_i \\
+&+ \beta_9*\mathbb{I}(Holiday_i == "No Holiday") + \beta_{10}*\mathbb{I}(Weekend_i == "Yes") \\
+&+  \beta_{11}\ \mathbb{I}(Month_i == "Feb") +   \dots + \beta_{21}\ \mathbb{I}(Month_i == "Dec") 
+\end{aligned}
+$$
+* GAM1 - generalized additive model with all continuous variables, except Snowfall defined as smooth functions,
+$$
+\begin{aligned}
+\log(\mu_i) &= \beta_0 + \beta_1*Snowfall_i + \beta_2*\mathbb{I}(Holiday_i == "No Holiday") + \beta_{3}*\mathbb{I}(Weekend_i == "Yes")\\
+&+ \beta_{4}\ \mathbb{I}(Month_i == "Feb") +  \dots + \beta_{14}\ \mathbb{I}(Month_i == "Dec") + f_1(Hour_i) + f_2(Temp_i) \\
+&+ f_3(Humidity_i) + f_4(WindSpeed_i) + f_5(Visibility_i) + f_6(SolarRadiation_i) + f_7(Rainfall_i)
+\end{aligned}
+$$
+* GAM2 - GAM1 model with added interaction between Hour and Weekend. In the model definition instead of specyfing $s(Hour, k = 24)$ as in GAM1, we now have $\texttt{s(Hour, by = Weekend, k = 24)}$,
+* GAM3 - Instead of only grouping the Hour variable by the Weekend attribute, we group it by a joint factor variable WeekendHoliday, $\texttt{s(Hour, by = WeekendHoliday, k = 24)}$.
+* GAM4 - GAM3 model with added tensor interaction between Temp and SolarRadiation and a tensor interaction between Temp and Humidity.
+
+\newpage
+
+```{r}
+library(kableExtra)
+kbl(res_all, booktabs=T, escape = F, digits=4, caption = "Comparison of GAM models.") %>%
+    add_header_above(c(" " = 1, "RMSE" = 2, "MAE" = 2, " " = 2)) %>%
+    kable_styling(latex_options = c("hold_position"))
+```
+
+
+The GAM model that includes interaction between Hour and joint factor WeekendHoliday, tensor interaction between Temp and Humidity and tensor interaction Temp and SolarRadiation achieves the best scores. The RMSE obtained for that model is half of the RMSE for the GLM model. The most significant improvement in the fit between GAM models was achieved when the Hour-Weekend interaction was included. The scores for the training set and for the test set are similar, so there is no evidence of overfitting.
+
+![Partial effects of smooth terms in the GAM4 model, together with 95% confidence bands.](test.png)
+
+The partial effects plot shows that the relation between Hour and whether a day is weekend or holiday has been captured well, with distinctive peaks appearing only when the day is not a holiday and not a weekend. The partial effect of tensor interactions is quite difficult to interpret, as the main effects are also present, we can instead look at the summed effect displayed in Figure 5.  
+From the summed effects of temp we can conclude that most people rent out bikes in warm temperatures, around 20 degrees, with high solar radiation. When temperatures are on the highest end, we observe a decreasing trend in rentals with an increase in solar radiation. As for the joint effect of humidity of temperature, the highest number of rentals occurs during warm temperatures and when humidity is low. 
+
+
+```{r summed_eff, fig.height=3, fig.cap="Summed effect of bivariate smooths."}
+par(mfrow = c(1,2), mar = c(4,4.4,0.5,1.2))
+vis.gam(gam4, view = c("Temp", "SolarRadiation"), plot.type = "contour", main = "", cex.lab = 0.9)
+vis.gam(gam4, view = c("Temp", "Humidity"), plot.type = "contour", main = "", cex.lab = 0.9)
+```
+
+<!-- ```{r, results='asis'} -->
+<!-- library(itsadug) -->
+<!-- options(xtable.comment = FALSE) -->
+<!-- gamtabs(gam3, xtable.comment = FALSE, caption = "Estimated parameters in the final model.") -->
+<!-- ``` -->
+
+<!-- All of the estimated parameters are deemed to be significant. All of the effective degrees of freedom are greater than one, which suggests non-linear relationship between covariates and the response variable.  -->
+
+
+
+
+
+
